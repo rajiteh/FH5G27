@@ -1,19 +1,25 @@
 [package]
-name = "dr2g27"
-version = "1.0.1"
+name = "g27-led-bridge"
+version = "2.0.0"
 edition = "2021"
 build = "src/dr2g27/build.rs"
+description = "Bridge racing game telemetry (DiRT Rally 2.0, Forza Horizon 5) to Logitech G27 LED RPM indicators"
+authors = ["Rajitha Perera <rajiteh@gmail.com>", "Aely0 (original DR2G27)"]
+license = "MIT"
+repository = "https://github.com/rajiteh/FH5G27"
+homepage = "https://github.com/rajiteh/FH5G27"
 
 [lib]
-name = "dr2g27"
+name = "g27_led_bridge"
 path = "src/lib.rs"
 
 [[bin]]
-name = "dr2g27"
+name = "g27-led-bridge"
 path = "src/dr2g27/main.rs"
 
 [dependencies]
 hidapi = "2.4.1"
+clap = { version = "4.0", features = ["derive"] }
 
 [build-dependencies]
 windows_exe_info = "0.4.1"

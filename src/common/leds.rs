@@ -1,4 +1,5 @@
 use crate::common::rpm::RPM;
+use crate::common::telemetry::TelemetryParser;
 use crate::common::util::DR2G27Result;
 use core::u8::{MAX, MIN};
 use hidapi::HidDevice;
@@ -52,10 +53,10 @@ impl LEDS {
         Ok(())
     }
 
-    pub fn update(&mut self, data: &[u8]) -> DR2G27Result {
-        self.rpm.update(data);
+    pub fn update(&mut self, data: &[u8], parser: &dyn TelemetryParser) -> DR2G27Result {
+        self.rpm.update(data, parser);
 
-        if !self.rpm.is_stale() {
+        if !self.rpm.is_stale() && self.rpm.is_race_active() {
             let new_state = self.new_led_state();
             if new_state != self.state {
                 self.update_device_and_state(new_state)?;

@@ -1,4 +1,4 @@
-use std::convert::TryFrom;
+use crate::common::telemetry::TelemetryParser;
 
 #[derive(Default)]
 pub struct RPM {
@@ -6,6 +6,7 @@ pub struct RPM {
     max: f32,
     idle: f32,
     staleness: u8,
+    is_race_active: bool,
 }
 
 impl RPM {
@@ -15,18 +16,6 @@ impl RPM {
         RPM {
             ..Default::default()
         }
-    }
-
-    fn f32_from_byte_slice(slice: &[u8]) -> f32 {
-        f32::from_le_bytes(<[u8; 4]>::try_from(slice).expect("bytes_to_f32"))
-    }
-
-    fn parse_data(data: &[u8]) -> (f32, f32, f32) {
-        (
-            Self::f32_from_byte_slice(&data[148..152]),
-            Self::f32_from_byte_slice(&data[252..256]),
-            Self::f32_from_byte_slice(&data[256..260]),
-        )
     }
 
     fn increment_staleness(&mut self) {
@@ -49,15 +38,21 @@ impl RPM {
         (self.current, self.max, self.idle)
     }
 
-    pub fn update(&mut self, data: &[u8]) {
-        let parsed_data = Self::parse_data(data);
-        if (self.current, self.max, self.idle) == parsed_data {
+    pub fn update(&mut self, data: &[u8], parser: &dyn TelemetryParser) {
+        let (current, max, idle, is_race_active) = parser.parse_rpm_data(data);
+        
+        if (self.current, self.max, self.idle, self.is_race_active) == (current, max, idle, is_race_active) {
             self.increment_staleness();
         } else {
             self.reset_staleness();
-            self.current = parsed_data.0;
-            self.max = parsed_data.1;
-            self.idle = parsed_data.2;
+            self.current = current;
+            self.max = max;
+            self.idle = idle;
+            self.is_race_active = is_race_active;
         }
+    }
+
+    pub fn is_race_active(&self) -> bool {
+        self.is_race_active
     }
 }
