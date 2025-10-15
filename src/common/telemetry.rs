@@ -6,6 +6,7 @@
 // - Game-agnostic RPM extraction
 
 use std::convert::TryFrom;
+use serde::{Deserialize, Serialize};
 
 /// Trait for parsing telemetry data from different racing games
 pub trait TelemetryParser {
@@ -89,7 +90,7 @@ impl TelemetryParser for ForzaHorizon5Parser {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub enum GameType {
     DirtRally2,
     ForzaHorizon5,
@@ -110,11 +111,19 @@ impl GameType {
         }
     }
 
-    pub fn from_str(s: &str) -> Option<GameType> {
+    pub fn parse_game_name(s: &str) -> Option<GameType> {
         match s.to_lowercase().as_str() {
             "dirt-rally-2" | "dr2" | "dirt" => Some(GameType::DirtRally2),
             "forza-horizon-5" | "fh5" | "forza" => Some(GameType::ForzaHorizon5),
             _ => None,
         }
+    }
+}
+
+impl std::str::FromStr for GameType {
+    type Err = ();
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Self::parse_game_name(s).ok_or(())
     }
 }

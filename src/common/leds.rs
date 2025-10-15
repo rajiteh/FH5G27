@@ -1,7 +1,7 @@
 use crate::common::rpm::RPM;
 use crate::common::telemetry::TelemetryParser;
 use crate::common::util::DR2G27Result;
-use core::u8::{MAX, MIN};
+
 use hidapi::HidDevice;
 
 pub struct LEDS {
@@ -13,7 +13,7 @@ pub struct LEDS {
 impl LEDS {
     pub fn new(device: HidDevice) -> Self {
         LEDS {
-            device: device,
+            device,
             rpm: RPM::new(),
             state: 0,
         }
@@ -25,11 +25,11 @@ impl LEDS {
 
     fn percentage_to_led_state(percentage: u8) -> u8 {
         match percentage {
-            MIN..=20 => 1,
+            u8::MIN..=20 => 1,
             21..=40 => 3,
             41..=60 => 7,
             61..=80 => 15,
-            81..=MAX => 31,
+            81..=u8::MAX => 31,
         }
     }
 

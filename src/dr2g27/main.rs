@@ -8,11 +8,14 @@
 use clap::{Parser, Subcommand};
 use g27_led_bridge::common::{
     leds::LEDS,
+    settings::AppSettings,
+    systray::{SystemTray, hide_console_window, create_event_loop},
     telemetry::GameType,
     util::{DR2G27Error, DR2G27Result, G27_PID, G27_VID},
 };
 use hidapi::{HidApi, HidDevice};
-use std::{net::UdpSocket, thread::sleep, time::Duration};
+use std::{net::UdpSocket, thread::{self, sleep}, time::Duration, sync::Arc};
+use winit::event::WindowEvent;
 
 // Telemetry config "hardware_settings_config.xml"
 // <udp enabled="true" extradata="3" ip="127.0.0.1" port="20777" delay="1" />
@@ -21,13 +24,21 @@ use std::{net::UdpSocket, thread::sleep, time::Duration};
 #[command(name = "g27-led-bridge")]
 #[command(about = "Racing game telemetry to Logitech G27 LED bridge")]
 struct Cli {
-    /// Game to bridge telemetry from
-    #[arg(short, long, default_value = "dirt-rally-2")]
-    game: String,
+    /// Game to bridge telemetry from (overrides saved setting)
+    #[arg(short, long)]
+    game: Option<String>,
     
-    /// UDP port to listen on (overrides default for selected game)
+    /// UDP port to listen on (overrides saved setting)
     #[arg(short, long)]
     port: Option<u16>,
+    
+    /// Run in console mode instead of system tray
+    #[arg(long)]
+    console: bool,
+    
+    /// Exit immediately if G27 wheel is not found during startup
+    #[arg(long)]
+    require_wheel: bool,
     
     #[command(subcommand)]
     command: Option<Commands>,
@@ -95,26 +106,55 @@ fn device_connected(hid: &HidApi) -> bool {
     false
 }
 
-fn connect_and_bridge(game_type: GameType, port: u16) -> DR2G27Result {
+fn connect_and_bridge(
+    game_type: GameType, 
+    port: u16,
+    wheel_status_tx: Option<&std::sync::mpsc::Sender<(bool, Option<String>)>>,
+    require_wheel: bool,
+) -> DR2G27Result {
     println!("# Looking for G27");
+    
+    if let Some(tx) = wheel_status_tx {
+        let _ = tx.send((false, Some("Searching...".to_string())));
+    }
+    
     let mut hid = HidApi::new()?;
-
+    let mut found = device_connected(&hid);
+    
+    if !found {
+        println!("# G27 not found...");
+        if let Some(tx) = wheel_status_tx {
+            let _ = tx.send((false, Some("Not found".to_string())));
+        }
+        
+        if require_wheel {
+            println!("# Exiting: G27 wheel required but not found");
+            std::process::exit(1);
+        }
+    }
+    
     loop {
-        if device_connected(&hid) {
+        if found {
             if let Ok(device) = hid.open(G27_VID, G27_PID) {
                 println!("# G27 connected");
+                if let Some(tx) = wheel_status_tx {
+                    let _ = tx.send((true, None));
+                }
                 return read_telemetry_and_update(device, game_type, port);
             } else {
                 println!("# Found G27 but failed to open connection");
+                if let Some(tx) = wheel_status_tx {
+                    let _ = tx.send((false, Some("Connection failed".to_string())));
+                }
             }
-        } else {
-            println!("# G27 not found, retrying in 1 second...");
-        }
+        } 
 
-        sleep(Duration::from_secs(1));
+        sleep(Duration::from_secs(5));
         hid.refresh_devices()?;
+        found = device_connected(&hid);
     }
 }
+
 
 fn test_led_functionality(continuous: bool) -> DR2G27Result {
     println!("# Looking for G27 for LED test");
@@ -169,59 +209,157 @@ fn run_led_test_cycle(device: &HidDevice) -> DR2G27Result {
 fn main() {
     let cli = Cli::parse();
     
-    // Parse game type
-    let game_type = match GameType::from_str(&cli.game) {
-        Some(game) => game,
-        None => {
-            println!("# Error: Unknown game '{}'. Supported games: dirt-rally-2, forza-horizon-5", cli.game);
-            println!("# Use --help for more information");
+    // Handle subcommands first
+    match cli.command {
+        Some(Commands::Test { continuous }) => {
+            match test_led_functionality(continuous) {
+                Ok(_) => {},
+                Err(e) => {
+                    eprintln!("# LED test failed: {:?}", e);
+                    std::process::exit(1);
+                }
+            }
+            return;
+        }
+        None => {}
+    }
+    
+    // Load settings
+    let mut settings = AppSettings::load();
+    
+    // Override settings with CLI arguments if provided
+    if let Some(ref game_str) = cli.game {
+        match GameType::parse_game_name(game_str) {
+            Some(game) => {
+                settings.set_game_type(game);
+            }
+            None => {
+                println!("# Error: Unknown game '{}'. Supported games: dirt-rally-2, forza-horizon-5", game_str);
+                println!("# Use --help for more information");
+                return;
+            }
+        }
+    }
+    
+    let port = settings.get_effective_port(cli.port);
+    
+    run(settings.game_type, port, cli.console, cli.require_wheel);
+}
+
+fn run(initial_game_type: GameType, initial_port: u16, _keep_console: bool, require_wheel: bool) {
+    use std::sync::mpsc;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    
+    if !_keep_console {
+        hide_console_window();
+    }
+    
+    println!("# Starting G27 LED Bridge in system tray mode");
+    println!("# Right-click system tray icon to change games or exit");
+    
+    // Create system tray
+    let tray = match SystemTray::new() {
+        Ok(tray) => tray,
+        Err(e) => {
+            eprintln!("Failed to create system tray: {}", e);
+            println!("# Falling back to console mode");
+            run(initial_game_type, initial_port, false, require_wheel);
             return;
         }
     };
     
-    // Determine port
-    let port = cli.port.unwrap_or_else(|| game_type.default_port());
+    // Create shared flags and channels
+    let exit_flag = Arc::new(AtomicBool::new(false));
+    let (status_tx, status_rx) = mpsc::channel::<String>();
+    let (wheel_status_tx, wheel_status_rx) = mpsc::channel::<(bool, Option<String>)>();
     
-    match cli.command {
-        Some(Commands::Test { continuous }) => {
-            if let Err(error) = test_led_functionality(continuous) {
-                println!("# LED test failed: {:?}", error);
+    // Start the bridge in a background thread with dynamic settings
+    let exit_flag_clone = Arc::clone(&exit_flag);
+    let tray_settings_clone = tray.settings.clone();
+    let _bridge_handle = thread::spawn(move || {
+        let mut current_game_type = initial_game_type;
+        let mut current_port = initial_port;
+        
+        loop {
+            if exit_flag_clone.load(Ordering::Relaxed) {
+                break;
             }
-        }
-        None => {
-            // Default behavior - bridge game to LEDs
-            let parser = game_type.parser();
-            println!("# Starting {} to G27 LED bridge", parser.game_name());
-            println!("# Use 'g27-led-bridge test' to test LED functionality without the game");
-            println!("# Supported games: dirt-rally-2 (dr2), forza-horizon-5 (fh5)");
             
-            loop {
-                match connect_and_bridge(game_type, port) {
-                    Err(error) => {
-                        match error {
-                            DR2G27Error::DR2UdpSocketError => {
-                                println!("# UDP Socket Error - This usually means:");
-                                println!("#   1. Port {} is already in use by another application", port);
-                                println!("#   2. The game is not sending telemetry data");
-                                println!("#   3. Firewall is blocking the connection");
-                                println!("# Retrying in 5 seconds...");
-                                sleep(Duration::from_secs(5));
-                            }
-                            DR2G27Error::G27ConnectionLostError => {
-                                println!("# G27 connection lost - device may have been disconnected");
-                                println!("# Retrying in 2 seconds...");
-                                sleep(Duration::from_secs(2));
-                            }
+            // Check for settings changes
+            if let Ok(settings) = tray_settings_clone.lock() {
+                let new_game_type = settings.game_type;
+                let new_port = settings.port;
+                
+                if new_game_type != current_game_type || new_port != current_port {
+                    current_game_type = new_game_type;
+                    current_port = new_port;
+                    let parser = new_game_type.parser();
+                    let _ = status_tx.send(format!("Switched to {} on port {}", parser.game_name(), new_port));
+                }
+            }
+            
+            match connect_and_bridge(current_game_type, current_port, Some(&wheel_status_tx), require_wheel) {
+                Err(error) => {
+                    let msg = match error {
+                        DR2G27Error::DR2UdpSocketError => {
+                            let _ = wheel_status_tx.send((false, Some("UDP Error".to_string())));
+                            "UDP Socket Error - retrying in 5 seconds...".to_string()
                         }
+                        DR2G27Error::G27ConnectionLostError => {
+                            let _ = wheel_status_tx.send((false, Some("Disconnected".to_string())));
+                            "G27 connection lost - retrying in 2 seconds...".to_string()
+                        }
+                    };
+                    let _ = status_tx.send(msg);
+                    
+                    // Sleep with periodic exit checks
+                    for _ in 0..50 { // Check every 100ms for 5 seconds max
+                        if exit_flag_clone.load(Ordering::Relaxed) {
+                            return;
+                        }
+                        sleep(Duration::from_millis(100));
                     }
-                    Ok(()) => {
-                        println!("# Bridge stopped unexpectedly, restarting...");
-                        sleep(Duration::from_secs(1));
-                    }
+                }
+                Ok(()) => {
+                    let _ = status_tx.send("Bridge stopped unexpectedly, restarting...".to_string());
+                    sleep(Duration::from_secs(1));
                 }
             }
         }
-    }
+    });
+    
+    // Run the event loop for system tray
+    let event_loop = create_event_loop();
+    let _ = event_loop.run(move |event, elwt| {
+        elwt.set_control_flow(winit::event_loop::ControlFlow::Wait);
+        
+        if let winit::event::Event::WindowEvent { event: WindowEvent::CloseRequested, .. } = event {
+            exit_flag.store(true, Ordering::Relaxed);
+            elwt.exit();
+        }
+        
+        // Check for status messages
+        while let Ok(status) = status_rx.try_recv() {
+            println!("# {}", status);
+        }
+        
+        // Check for wheel status updates
+        while let Ok((connected, error_msg)) = wheel_status_rx.try_recv() {
+            tray.update_wheel_status(connected, error_msg.as_deref());
+        }
+        
+        // Check for settings changes (menu)
+        if tray.settings_changed() {
+            println!("# Settings changed - bridge will update automatically");
+            tray.update_menu_display();
+        }
+        
+        // Check if we should exit
+        if tray.should_exit() {
+            exit_flag.store(true, Ordering::Relaxed);
+            elwt.exit();
+        }
+    });
 }
 
 #[test]

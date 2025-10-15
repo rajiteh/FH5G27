@@ -10,6 +10,10 @@ Multi-game telemetry bridge that maps in-game RPM data to Logitech G27 Racing Wh
 
 Active LED states are mapped linearly to RPM range `[(max - (max - idle) / 2)..max]`.
 
+### Installation
+
+Download the binary from [releases](https://github.com/rajiteh/G27-LED-Bridge/releases) page.
+
 ### Requirements
 
 #### DiRT Rally 2.0 Setup
@@ -30,29 +34,21 @@ Enable telemetry in game settings:
 
 ### Usage
 
-**DiRT Rally 2.0** (default):
-```bash
-g27-led-bridge.exe
-# or explicitly specify
-g27-led-bridge.exe --game dirt-rally-2
-```
+Open the executable directly from windows.
 
-**Forza Horizon 5**:
-```bash
-g27-led-bridge.exe --game forza-horizon-5
-# or short form
-g27-led-bridge.exe --game fh5
-```
+![alt text](image.png)
 
-**Custom port**:
-```bash
-g27-led-bridge.exe --game fh5 --port 12345
-```
+Following flags can be set by invoking the executable from a command line or creating a windows shortcut with a modified target attribute.
 
-**Test LED functionality** without game running:
 ```bash
-# Single test cycle
-g27-led-bridge.exe test
+# With initial game and port settings (saved for future runs)
+g27-led-bridge.exe --game fh5 --port 5685
+
+# Keep console open for debugging in tray mode
+g27-led-bridge.exe --console
+
+# Exit immediately if G27 wheel is not found (useful for scripts/automation)
+g27-led-bridge.exe --require-wheel
 
 # Continuous test pattern (press Ctrl+C to stop)
 g27-led-bridge.exe test --continuous
@@ -61,6 +57,14 @@ g27-led-bridge.exe test --continuous
 **Available game aliases**:
 - DiRT Rally 2.0: `dirt-rally-2`, `dr2`, `dirt`
 - Forza Horizon 5: `forza-horizon-5`, `fh5`, `forza`
+
+### Settings Management
+
+- Settings automatically saved to `%APPDATA%\G27-LED-Bridge\settings.toml`
+- Edit settings directly in Notepad via tray menu
+- Manual "Reload Settings" ensures changes are applied when ready
+- Simple and reliable workflow - no complex file watching
+- Changes take effect immediately without application restart
 
 ### Troubleshooting
 
@@ -129,15 +133,20 @@ The original DR2G27 provided the foundation for DiRT Rally 2.0 telemetry integra
 
 ### Changelog
 
-**v2.0.0** - Multi-Game Support Release (Fork by rajiteh)
-- ➕ Added Forza Horizon 5 telemetry support
-- ➕ Game selection via `--game` parameter  
-- ➕ Custom port configuration via `--port` parameter
-- ➕ Improved error handling and user feedback
-- ➕ Enhanced CLI with help system
-- 🔧 Refactored with trait-based telemetry parsing
-- 🔧 Better UDP socket management
-- 📚 Updated documentation and examples
+**v2.0.0** - System Tray & Multi-Game Support Release (Fork by rajiteh)
+- ➕ **System Tray Mode** - Default background operation with tray icon
+- ➕ **Persistent Settings** - Auto-save/load configuration to `%APPDATA%`
+- ➕ **Dynamic Game Switching** - Change games via tray menu without restart
+- ➕ **Settings Editor Integration** - Direct Notepad access for configuration
+- ➕ **Forza Horizon 5 Support** - Full telemetry integration
+- ➕ **Require Wheel Flag** - `--require-wheel` exits immediately if G27 not found (ideal for automation/scripts)
+- ➕ Game selection via CLI `--game` parameter (overrides saved settings)
+- ➕ Custom port configuration via `--port` parameter (overrides saved settings)
+- ➕ Console mode via `--console` flag for debugging
+- 🔧 Refactored with trait-based telemetry parsing architecture
+- 🔧 Enhanced error handling and automatic reconnection
+- 🔧 Improved UDP socket management and packet validation
+- 📚 Comprehensive documentation with system tray usage guide
 - 📛 Renamed project to G27-LED-Bridge
 
 **v1.0.1** - Original DiRT Rally 2.0 Implementation (by Aely0)
